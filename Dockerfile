@@ -1,11 +1,11 @@
 # ---- build stage ----
-FROM python:3.12-slim AS build
+FROM python:3.15-slim AS build
 WORKDIR /w
 COPY requirements.txt .
 RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 
 # ---- runtime stage: small, non-root ----
-FROM python:3.12-slim
+FROM python:3.15-slim
 ARG GIT_SHA=dev
 ENV GIT_SHA=${GIT_SHA} PYTHONUNBUFFERED=1
 # Pull in OS security patches released since the base image was built
