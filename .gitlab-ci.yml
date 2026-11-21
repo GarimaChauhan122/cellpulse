@@ -1,0 +1,116 @@
+# CellPulse pipeline: build once, scan, deploy staging automatically,
+# promote to production manually, auto-rollback on failed smoke test.
+stages: [verify, security, build, scan, deploy-staging, deploy-prod]
+
+variables:
+  IMAGE: $CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA   # immutable tag = commit sha
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+
+default:
+  cache:
+    key: { files: [requirements-dev.txt] }
+    paths: [.cache/pip]
+  interruptible: true
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+# ---------- verify ----------
+lint:
+  stage: verify
+  image: python:3.12-slim
+  script: [pip install -q ruff==0.8.4, ruff check ., ruff format --check .]
+
+unit-test:
+  stage: verify
+  image: python:3.12-slim
+  script: [pip install -q -r requirements-dev.txt, pytest]
+  coverage: '/TOTAL.*\s+(\d+)%/'
+  artifacts:
+    when: always
+    reports:
+      junit: report.xml
+      coverage_report: { coverage_format: cobertura, path: coverage.xml }
+
+helm-lint:
+  stage: verify
+  image: alpine/helm:3.16.3
+  script: [helm lint helm/cellpulse, helm template t helm/cellpulse > /dev/null]
+
+# ---------- security (shift-left) ----------
+secret-scan:
+  stage: security
+  image: { name: zricethezav/gitleaks:v8.21.2, entrypoint: [""] }
+  script: [gitleaks detect --source . --no-banner --redact]
+
+sast-bandit:
+  stage: security
+  image: python:3.12-slim
+  script: [pip install -q bandit==1.8.0, bandit -r app -ll]
+
+dependency-audit:
+  stage: security
+  image: python:3.12-slim
+  script: [pip install -q pip-audit==2.7.3, pip-audit -r requirements.txt]
+
+# ---------- build ----------
+build-image:
+  stage: build
+  image: { name: gcr.io/kaniko-project/executor:debug, entrypoint: [""] }
+  script:
+    - mkdir -p /kaniko/.docker
+    - echo "{\"auths\":{\"$CI_REGISTRY\":{\"auth\":\"$(printf '%s:%s' $CI_REGISTRY_USER $CI_REGISTRY_PASSWORD | base64 | tr -d '\n')\"}}}" > /kaniko/.docker/config.json
+    - /kaniko/executor --context . --dockerfile Dockerfile --build-arg GIT_SHA=$CI_COMMIT_SHORT_SHA
+        --destination $IMAGE --cache=true
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+# ---------- scan the built artifact ----------
+image-scan:
+  stage: scan
+  image: { name: aquasec/trivy:0.58.1, entrypoint: [""] }
+  script: [trivy image --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed $IMAGE]
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+sbom:
+  stage: scan
+  image: { name: anchore/syft:v1.18.1, entrypoint: [""] }
+  script: [syft $IMAGE -o cyclonedx-json=sbom.cdx.json]
+  artifacts: { paths: [sbom.cdx.json], expire_in: 90 days }
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+# ---------- deploy ----------
+.deploy: &deploy
+  image: { name: alpine/k8s:1.31.3, entrypoint: [""] }
+  script:
+    - helm upgrade --install cellpulse-$ENV helm/cellpulse
+        --namespace cellpulse-$ENV --create-namespace
+        --set image.repository=$CI_REGISTRY_IMAGE --set image.tag=$CI_COMMIT_SHORT_SHA
+        --set replicaCount=$REPLICAS --atomic --timeout 120s   # --atomic = auto-rollback if rollout fails
+    - kubectl -n cellpulse-$ENV port-forward svc/cellpulse-$ENV 8080:80 & sleep 3
+    - python3 scripts/smoke_test.py http://localhost:8080 $CI_COMMIT_SHORT_SHA
+  after_script:
+    - 'helm status cellpulse-$ENV -n cellpulse-$ENV || true'
+
+deploy-staging:
+  <<: *deploy
+  stage: deploy-staging
+  variables: { ENV: staging, REPLICAS: "1" }
+  environment: { name: staging, url: https://cellpulse-staging.example.com }
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+deploy-prod:
+  <<: *deploy
+  stage: deploy-prod
+  variables: { ENV: prod, REPLICAS: "3" }
+  environment: { name: production, url: https://cellpulse.example.com }
+  resource_group: production        # never two prod deploys at once
+  when: manual                      # human approval gate
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: manual

@@ -1,0 +1,379 @@
+{
+ "uid": "cellpulse",
+ "title": "CellPulse - RAN KPI Overview",
+ "schemaVersion": 39,
+ "version": 1,
+ "refresh": "5s",
+ "time": {
+  "from": "now-10m",
+  "to": "now"
+ },
+ "tags": [
+  "cellpulse"
+ ],
+ "panels": [
+  {
+   "id": 1,
+   "type": "stat",
+   "title": "KPI samples ingested",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "sum(cellpulse_kpi_ingested_total)",
+     "legendFormat": "",
+     "refId": "A"
+    }
+   ],
+   "gridPos": {
+    "x": 0,
+    "y": 0,
+    "w": 6,
+    "h": 4
+   },
+   "fieldConfig": {
+    "defaults": {
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       }
+      ]
+     },
+     "decimals": 0
+    },
+    "overrides": []
+   },
+   "options": {
+    "colorMode": "value",
+    "graphMode": "area",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    }
+   }
+  },
+  {
+   "id": 2,
+   "type": "stat",
+   "title": "Critical alerts (total)",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "sum(cellpulse_alerts_total{severity=\"critical\"})",
+     "legendFormat": "",
+     "refId": "A"
+    }
+   ],
+   "gridPos": {
+    "x": 6,
+    "y": 0,
+    "w": 6,
+    "h": 4
+   },
+   "fieldConfig": {
+    "defaults": {
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "orange",
+        "value": null
+       }
+      ]
+     },
+     "decimals": 0
+    },
+    "overrides": []
+   },
+   "options": {
+    "colorMode": "value",
+    "graphMode": "area",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    }
+   }
+  },
+  {
+   "id": 3,
+   "type": "stat",
+   "title": "Cells above 90% PRB (now)",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "count(cellpulse_prb_utilization_pct > 90) or vector(0)",
+     "legendFormat": "",
+     "refId": "A"
+    }
+   ],
+   "gridPos": {
+    "x": 12,
+    "y": 0,
+    "w": 6,
+    "h": 4
+   },
+   "fieldConfig": {
+    "defaults": {
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "red",
+        "value": 1
+       }
+      ]
+     },
+     "decimals": 0
+    },
+    "overrides": []
+   },
+   "options": {
+    "colorMode": "value",
+    "graphMode": "area",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    }
+   }
+  },
+  {
+   "id": 4,
+   "type": "stat",
+   "title": "Cells reporting",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "count(cellpulse_prb_utilization_pct)",
+     "legendFormat": "",
+     "refId": "A"
+    }
+   ],
+   "gridPos": {
+    "x": 18,
+    "y": 0,
+    "w": 6,
+    "h": 4
+   },
+   "fieldConfig": {
+    "defaults": {
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       }
+      ]
+     },
+     "decimals": 0
+    },
+    "overrides": []
+   },
+   "options": {
+    "colorMode": "value",
+    "graphMode": "area",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    }
+   }
+  },
+  {
+   "id": 5,
+   "type": "timeseries",
+   "title": "Ingest rate (samples/sec)",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "sum(rate(cellpulse_kpi_ingested_total[1m]))",
+     "legendFormat": "samples/s",
+     "refId": "A"
+    }
+   ],
+   "gridPos": {
+    "x": 0,
+    "y": 4,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short"
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 6,
+   "type": "timeseries",
+   "title": "Alerts per second by severity",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "sum by (severity) (rate(cellpulse_alerts_total[1m]))",
+     "legendFormat": "{{severity}}",
+     "refId": "A"
+    }
+   ],
+   "gridPos": {
+    "x": 12,
+    "y": 4,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short"
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 7,
+   "type": "timeseries",
+   "title": "PRB utilisation per cell (%)",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "cellpulse_prb_utilization_pct",
+     "legendFormat": "{{cell_id}}",
+     "refId": "A"
+    }
+   ],
+   "gridPos": {
+    "x": 0,
+    "y": 12,
+    "w": 16,
+    "h": 10
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percent",
+     "max": 100,
+     "min": 0
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 8,
+   "type": "bargauge",
+   "title": "Top 5 busiest cells",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "topk(5, cellpulse_prb_utilization_pct)",
+     "legendFormat": "{{cell_id}}",
+     "refId": "A",
+     "instant": true
+    }
+   ],
+   "gridPos": {
+    "x": 16,
+    "y": 12,
+    "w": 8,
+    "h": 10
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percent",
+     "min": 0,
+     "max": 100,
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "orange",
+        "value": 80
+       },
+       {
+        "color": "red",
+        "value": 90
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "orientation": "horizontal",
+    "displayMode": "gradient",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    }
+   }
+  }
+ ]
+}

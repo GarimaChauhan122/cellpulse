@@ -1,0 +1,5 @@
+apiVersion: v2
+name: cellpulse
+description: RAN KPI ingestion and alerting demo service
+version: 0.1.0
+appVersion: "0.1.0"

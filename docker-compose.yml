@@ -1,0 +1,40 @@
+# Local observability stack: app + traffic simulator + Prometheus + Grafana
+#   docker compose up --build
+# Grafana:     http://localhost:3000   (dashboard opens automatically, no login)
+# Prometheus:  http://localhost:9090
+# App docs:    http://localhost:8080/docs
+services:
+  app:
+    build: .
+    ports: ["8080:8080"]
+
+  simulator:
+    image: python:3.12-slim
+    volumes: ["./scripts:/scripts:ro"]
+    command: python /scripts/simulate_traffic.py --url http://app:8080 --cells 10 --interval 2
+    depends_on: [app]
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    ports: ["9090:9090"]
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prom-data:/prometheus
+    depends_on: [app]
+
+  grafana:
+    image: grafana/grafana:11.3.1
+    ports: ["3000:3000"]
+    environment:
+      # demo-only: skip login. Never do this outside a local machine.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/cellpulse.json
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on: [prometheus]
+
+volumes:
+  prom-data:
