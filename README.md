@@ -41,9 +41,3 @@ docker compose up --build      # or: make monitor
 Grafana at http://localhost:3000 opens the *CellPulse - RAN KPI Overview* dashboard
 (ingest rate, alerts by severity, PRB utilisation per cell, busiest cells). A simulator
 container feeds the app with synthetic cell KPIs; Prometheus scrapes `/metrics/` every 5s.
-
-## Ideas to extend (day 2+)
-- Add Terraform for the cluster/namespace and run `plan` on MRs
-- AI step: on job failure, send redacted log tail to an LLM and post a root-cause comment on the MR
-- Pipeline analytics script (duration, failure rate, flaky tests) via the GitLab API
-- Canary/blue-green deploy, DORA metrics dashboard
