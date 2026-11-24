@@ -28,13 +28,6 @@ A small FastAPI service that ingests radio-cell KPIs (PRB utilisation, drop-call
 
 Dependabot opens weekly update PRs.
 
-## Run locally
-
-```bash
-make dev && make test && make run   # API docs at http://localhost:8080/docs
-make monitor                        # app + Prometheus + Grafana at http://localhost:3000
-make kind                           # deploy to a local kind cluster with Helm
-```
 
 ## AI failure analysis
 
