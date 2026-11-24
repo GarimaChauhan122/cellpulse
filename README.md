@@ -1,43 +1,49 @@
-# CellPulse – RAN KPI service with a production-style CI/CD pipeline
+# CellPulse
 
 ![CI/CD](https://github.com/GarimaChauhan122/cellpulse/actions/workflows/ci.yml/badge.svg)
 
-A small FastAPI service that ingests radio-cell KPIs (PRB utilisation, throughput,
-drop-call rate, latency) and raises alerts. The app is deliberately small and
-telecom-flavoured; **the point of the repo is the delivery pipeline around it**.
+A small FastAPI service that ingests radio-cell KPIs (PRB utilisation, drop-call rate, latency), raises alerts and exposes Prometheus metrics.
 
-## Pipeline (GitLab CI)
-`verify → security → build → scan → deploy-staging → deploy-prod`
+![Grafana dashboard](docs/grafana-dashboard.png)
 
-| Stage | What | Why |
-|---|---|---|
-| verify | ruff, pytest + coverage gate (85%), helm lint | fast feedback on every MR |
-| security | Gitleaks, Bandit (SAST), pip-audit | shift-left security |
-| build | Kaniko, multi-stage non-root image tagged with commit SHA | build once, immutable artifact |
-| scan | Trivy (fails on HIGH/CRITICAL), Syft SBOM (CycloneDX) | supply-chain security |
-| deploy-staging | Helm `--atomic` + smoke test verifying the deployed SHA | auto-rollback on failure |
-| deploy-prod | manual gate, `resource_group` lock, 3 replicas | safe promotion |
+## What's inside
 
-Other features: pip caching, MR-only vs main-only jobs via `workflow:rules`,
-interruptible jobs, JUnit + coverage reports in the MR UI, rolling update with
-`maxUnavailable: 0`, probes, read-only root FS, Prometheus metrics, optional HPA.
+- **App:** FastAPI, threshold-based alert rules, `/metrics` for Prometheus
+- **Packaging:** multi-stage non-root Docker image, Helm chart
+- **Monitoring:** Prometheus + Grafana dashboard, fed by a traffic simulator
+- **CI/CD:** GitHub Actions (`.github/workflows/ci.yml`) and GitLab CI (`.gitlab-ci.yml`)
+- **AI failure analysis:** when CI fails, an LLM reads the failed logs and posts a root-cause summary on the pull request
 
-## Pipeline (GitHub Actions) – `.github/workflows/ci.yml`
-Same flow as the GitLab file, using GitHub-native pieces: matrix tests (py3.11/3.12), pip caching,
-Docker layer cache, Trivy + SBOM, then a **throwaway kind cluster** per run where the exact built image is
-deployed with Helm (`--atomic`) and smoke-tested. On `main`, publishing the image to GHCR waits for approval
-via the `production` environment. Least-privilege `permissions`, concurrency cancel, Dependabot updates.
+## Pipeline
+
+`lint → test (85% coverage gate) → security scans → build → image scan + SBOM → deploy to kind with Helm → smoke test → publish to GHCR (manual approval)`
+
+| Stage | Tools |
+|---|---|
+| Lint and test | ruff, pytest, helm lint |
+| Security | Gitleaks, Bandit, pip-audit, Trivy |
+| Supply chain | Syft SBOM (CycloneDX) |
+| Deploy | Helm `--atomic` on a throwaway kind cluster |
+| Release | GHCR, gated by the `production` environment |
+
+Dependabot opens weekly update PRs.
 
 ## Run locally
-```
-make dev && make test && make run     # API docs at :8080/docs
-make kind                             # deploy to a local kind cluster via Helm
+
+```bash
+make dev && make test && make run   # API docs at http://localhost:8080/docs
+make monitor                        # app + Prometheus + Grafana at http://localhost:3000
+make kind                           # deploy to a local kind cluster with Helm
 ```
 
-## Live dashboard (Prometheus + Grafana)
-```
-docker compose up --build      # or: make monitor
-```
-Grafana at http://localhost:3000 opens the *CellPulse - RAN KPI Overview* dashboard
-(ingest rate, alerts by severity, PRB utilisation per cell, busiest cells). A simulator
-container feeds the app with synthetic cell KPIs; Prometheus scrapes `/metrics/` every 5s.
+## AI failure analysis
+
+`scripts/ai_failure_analyzer.py` runs after a failed CI run. It redacts secrets from the logs, sends them to an OpenAI-compatible LLM endpoint and posts the answer on the PR. It never fails the pipeline: if the LLM is unreachable, it posts a plain log summary instead.
+
+Configure it under **Settings → Secrets and variables → Actions**:
+
+| Name | Type | Purpose |
+|---|---|---|
+| `AI_API_KEY` | secret | API key for the LLM provider |
+| `AI_BASE_URL` | variable | OpenAI-compatible base URL |
+| `AI_MODEL` | variable | model name |
