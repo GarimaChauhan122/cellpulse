@@ -1,0 +1,39 @@
+# When the main pipeline fails, an LLM reads the failed jobs' logs and posts a root-cause summary
+# on the pull request (and in this run's summary). Free: uses GitHub Models with the built-in token.
+name: AI failure analysis
+
+on:
+  workflow_run:
+    workflows: ["CI/CD"]
+    types: [completed]
+
+permissions:
+  contents: read
+  actions: read          # download the failed jobs' logs
+  pull-requests: write   # post the comment
+  models: read           # call GitHub Models with the built-in GITHUB_TOKEN
+
+jobs:
+  analyze:
+    # skip Dependabot runs: their token is read-only, and 11 update PRs would burn the free quota
+    if: >-
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.actor.login != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # workflow_run checks out the DEFAULT branch, so a pull request can't change the script that
+      # reads its own (untrusted) logs. Do not switch this to the PR's head ref.
+      - uses: actions/checkout@v4
+      - name: Analyze failed jobs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+          # optional overrides - set under Settings > Secrets and variables > Actions
+          AI_MODEL: ${{ vars.AI_MODEL }}
+          AI_BASE_URL: ${{ vars.AI_BASE_URL }}
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
+        run: python3 scripts/ai_failure_analyzer.py
