@@ -25,6 +25,20 @@ jobs:
       # workflow_run checks out the DEFAULT branch, so a pull request can't change the script that
       # reads its own (untrusted) logs. Do not switch this to the PR's head ref.
       - uses: actions/checkout@v4
+
+      # TEMPORARY: remove once you've read the output. Shows what the endpoint really returns.
+      - name: Probe GitHub Models
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          curl -i -sS https://models.github.ai/inference/chat/completions \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            -H "Content-Type: application/json" \
+            -d '{"model":"openai/gpt-4.1","messages":[{"role":"user","content":"hi"}]}'
+
       - name: Analyze failed jobs
         env:
           GH_TOKEN: ${{ github.token }}
