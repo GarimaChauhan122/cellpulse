@@ -306,7 +306,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"LLM call failed: {exc}")
 
     body = f"{MARKER}\n## AI failure analysis\n\n{analysis}\n\n{footer}".rstrip() + "\n"
-    print(body)
+    # print(body)
+    print(body.replace("##[", "# ["))
 
     summary_file = os.getenv("GITHUB_STEP_SUMMARY")
     if summary_file:
