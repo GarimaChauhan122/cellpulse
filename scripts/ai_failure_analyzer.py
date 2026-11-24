@@ -124,16 +124,27 @@ def gh_api(path: str, *args: str) -> str:
     return result.stdout
 
 
+def download_job_log(repo: str, job_id: int) -> str:
+    """Job logs contain terminal colour codes; recent `gh` versions refuse to print them without a flag."""
+    path = f"repos/{repo}/actions/jobs/{job_id}/logs"
+    try:
+        try:
+            return gh_api(path, "--allow-escape-sequences")
+        except subprocess.CalledProcessError as exc:
+            if "unknown flag" not in (exc.stderr or ""):
+                raise
+            return gh_api(path)  # older gh without the flag
+    except subprocess.CalledProcessError as exc:
+        return f"(could not download log: {(exc.stderr or '').strip()[:200]})"
+
+
 def fetch_failures(repo: str, run_id: str) -> list[dict]:
     data = json.loads(gh_api(f"repos/{repo}/actions/runs/{run_id}/jobs?per_page=100&filter=latest"))
     failures = []
     for job in data.get("jobs", []):
         if job.get("conclusion") != "failure":
             continue
-        try:
-            raw = gh_api(f"repos/{repo}/actions/jobs/{job['id']}/logs")
-        except subprocess.CalledProcessError as exc:
-            raw = f"(could not download log: {exc.stderr.strip()[:200]})"
+        raw = download_job_log(repo, job["id"])
         steps = [s["name"] for s in job.get("steps", []) if s.get("conclusion") == "failure"]
         failures.append({"name": job["name"], "failed_steps": steps, "log": prepare_log(raw)})
     return failures
@@ -160,13 +171,20 @@ def call_llm(messages: list[dict], model: str, base_url: str, api_key: str) -> s
         "Authorization": f"Bearer {api_key}",
         "Accept": "application/json",
         "X-GitHub-Api-Version": "2022-11-28",  # ignored by other providers
+        "User-Agent": "cellpulse-ci-analyzer",  # GitHub APIs expect a User-Agent
     }
     last_error = None
     for attempt in range(1, 4):
         try:
             req = urllib.request.Request(url, data=payload, headers=headers, method="POST")
             with urllib.request.urlopen(req, timeout=90) as resp:  # noqa: S310 - fixed https endpoint
-                return json.loads(resp.read())["choices"][0]["message"]["content"].strip()
+                raw = resp.read().decode(errors="replace")
+                try:
+                    return json.loads(raw)["choices"][0]["message"]["content"].strip()
+                except (json.JSONDecodeError, KeyError, IndexError, TypeError):
+                    raise RuntimeError(
+                        f"unexpected reply from {url} (HTTP {resp.status}): {raw[:200]!r}"
+                    ) from None
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode(errors="replace")[:300]
             last_error = f"HTTP {exc.code} from {url}: {detail}"
