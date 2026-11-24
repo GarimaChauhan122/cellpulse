@@ -223,7 +223,7 @@ def call_llm(messages: list[dict], model: str, base_url: str, api_key: str) -> s
         "User-Agent": "cellpulse-ci-analyzer",  # GitHub APIs expect a User-Agent
     }
     last_error = None
-    for attempt in range(1, 4):
+    for attempt in range(1, 6):
         try:
             status, raw, final_url = _post(url, payload, headers)
             try:
@@ -240,7 +240,7 @@ def call_llm(messages: list[dict], model: str, base_url: str, api_key: str) -> s
             wait = min(int(exc.headers.get("Retry-After", 5 * attempt) or 5), 30)
         except (urllib.error.URLError, TimeoutError) as exc:
             last_error, wait = f"{type(exc).__name__}: {exc}", 5 * attempt
-        if attempt < 3:
+        if attempt < 5:
             time.sleep(wait)
     raise RuntimeError(last_error)
 
