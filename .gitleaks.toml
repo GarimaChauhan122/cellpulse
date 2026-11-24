@@ -1,0 +1,8 @@
+title = "CellPulse gitleaks config"
+
+[extend]
+useDefault = true   # keep all the built-in rules
+
+[allowlist]
+description = "Fake credentials that exist only to test the log redaction"
+paths = ['''tests/test_ai_analyzer\.py''']

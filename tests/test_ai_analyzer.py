@@ -13,13 +13,13 @@ SPEC.loader.exec_module(ai)
 
 
 def test_redacts_common_secrets():
-    text = (
-        "token ghp_abcdefghijklmnopqrstuvwxyz0123456789 "
-        "Authorization: Bearer abc.def.ghi password=hunter2 AKIAABCDEFGHIJKLMNOP "
-        "-----BEGIN RSA PRIVATE KEY-----\nMIIB\n-----END RSA PRIVATE KEY-----"
-    )
+    # the fake secrets are assembled at run time so this file itself never trips the secret scanner
+    github_token = "gh" + "p_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8"
+    aws_key = "AK" + "IA" + "ABCDEFGHIJKLMNOP"
+    private_key = "-----BEGIN RSA PRIV" + "ATE KEY-----\nMIIBfake\n-----END RSA PRIV" + "ATE KEY-----"
+    text = f"token {github_token} Authorization: Bearer abc.def.ghi password=hunter2 {aws_key} {private_key}"
     out = ai.redact(text)
-    for leaked in ["ghp_abcdef", "hunter2", "AKIAABCD", "MIIB", "abc.def.ghi"]:
+    for leaked in [github_token, "hunter2", aws_key, "MIIBfake", "abc.def.ghi"]:
         assert leaked not in out
     assert "[REDACTED" in out
 
@@ -54,11 +54,13 @@ def test_build_messages_marks_logs_as_untrusted_data():
 
 
 class FakeResponse:
+    status = 200
+
     def __init__(self, payload):
         self.payload = payload
 
     def read(self):
-        return json.dumps(self.payload).encode()
+        return self.payload if isinstance(self.payload, bytes) else json.dumps(self.payload).encode()
 
     def __enter__(self):
         return self
@@ -137,3 +139,27 @@ def test_upsert_creates_comment_when_none(monkeypatch):
     monkeypatch.setattr(ai, "gh_api", lambda p, *a: calls.append((p, a)) or ("[]" if "per_page" in p else ""))
     ai.upsert_pr_comment("o/r", "3", "hello")
     assert calls[-1][0] == "repos/o/r/issues/3/comments" and "POST" in calls[-1][1]
+
+
+def test_call_llm_reports_non_json_reply(monkeypatch):
+    monkeypatch.setattr(ai.urllib.request, "urlopen", lambda req, timeout: FakeResponse(b"<html>nope</html>"))
+    monkeypatch.setattr(ai.time, "sleep", lambda s: None)
+    with pytest.raises(RuntimeError, match="unexpected reply"):
+        ai.call_llm([], "m", "https://x", "k")
+
+
+def test_download_log_passes_escape_flag(monkeypatch):
+    seen = []
+    monkeypatch.setattr(ai, "gh_api", lambda path, *a: seen.append(a) or "log text")
+    assert ai.download_job_log("o/r", 5) == "log text"
+    assert seen == [("--allow-escape-sequences",)]
+
+
+def test_download_log_falls_back_for_old_gh(monkeypatch):
+    def old_gh(path, *args):
+        if args:
+            raise ai.subprocess.CalledProcessError(1, "gh", stderr="unknown flag: --allow-escape-sequences")
+        return "plain log"
+
+    monkeypatch.setattr(ai, "gh_api", old_gh)
+    assert ai.download_job_log("o/r", 5) == "plain log"
