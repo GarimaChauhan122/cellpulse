@@ -6,7 +6,7 @@ RULES = [
     # (rule name, predicate, severity, message template)
     (
         "prb_congestion",
-        lambda k: k.prb_utilization_pct >= 90,
+        lambda k: k.prb_utilization_pct >= 99,
         "critical",
         "PRB utilization {k.prb_utilization_pct:.0f}% - cell congested",
     ),
