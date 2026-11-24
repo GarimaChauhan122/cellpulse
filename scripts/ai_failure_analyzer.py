@@ -30,6 +30,7 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 MARKER = "<!-- ai-failure-analysis -->"
@@ -88,16 +89,20 @@ def clean_log(raw: str) -> list[str]:
 
 
 def select_lines(lines: list[str], tail_lines: int = TAIL_LINES) -> list[str]:
-    """The tail of the log, plus any earlier ##[error] lines that the tail would otherwise hide."""
-    if len(lines) <= tail_lines:
-        return lines
-    head, tail = lines[:-tail_lines], lines[-tail_lines:]
-    errors = [line for line in head if "##[error]" in line][:10]
-    return (
-        errors + ["[... earlier output omitted ...]"] + tail
-        if errors
-        else ["[... earlier output omitted ...]"] + tail
-    )
+    """The output leading up to the failure.
+
+    A job log ends with "Post job cleanup" noise, so a plain tail would miss the real error.
+    Instead the window ends just after the last ##[error] line (or at the end if there is none).
+    Any earlier ##[error] lines that fall outside the window are kept as well.
+    """
+    error_idx = [i for i, line in enumerate(lines) if "##[error]" in line]
+    end = min(len(lines), error_idx[-1] + 3) if error_idx else len(lines)
+    window_start = max(0, end - tail_lines)
+    window = lines[window_start:end]
+    earlier = [line for line in lines[:window_start] if "##[error]" in line][:10]
+    if window_start > 0:
+        return earlier + ["[... earlier output omitted ...]"] + window
+    return window
 
 
 def prepare_log(raw: str) -> str:
@@ -161,37 +166,79 @@ def upsert_pr_comment(repo: str, pr_number: str, body: str) -> None:
 
 
 # --------------------------------------------------------------------------- LLM call
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """urllib silently turns a redirected POST into a GET (the symptom was HTTP 200 'OK').
+    Switch automatic redirects off; call_llm follows them itself and keeps the POST."""
+
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+_opener = urllib.request.build_opener(_NoRedirect())
+REDIRECT_CODES = (301, 302, 303, 307, 308)
+
+
+def _open(req: urllib.request.Request, timeout: int):
+    return _opener.open(req, timeout=timeout)
+
+
+def _same_site(url: str, origin: str) -> bool:
+    """Only follow redirects to the same site over https (never leak the token elsewhere)."""
+    new, old = urllib.parse.urlsplit(url), urllib.parse.urlsplit(origin)
+    local = new.hostname in ("127.0.0.1", "localhost")
+    return (new.scheme == "https" or local) and (new.hostname or "").split(".")[-2:] == (
+        old.hostname or ""
+    ).split(".")[-2:]
+
+
+def _post(url: str, payload: bytes, headers: dict) -> tuple[int, str, str]:
+    """POST, following redirects while keeping the POST. Returns (status, body, final_url)."""
+    origin = url
+    for _ in range(4):
+        req = urllib.request.Request(url, data=payload, headers=headers, method="POST")
+        try:
+            with _open(req, timeout=90) as resp:
+                return resp.status, resp.read().decode(errors="replace"), url
+        except urllib.error.HTTPError as exc:
+            if exc.code not in REDIRECT_CODES:
+                raise
+            target = urllib.parse.urljoin(url, exc.headers.get("Location", ""))
+            if not _same_site(target, origin):
+                raise RuntimeError(f"refusing to follow redirect from {url} to {target}") from None
+            url = target
+    raise RuntimeError(f"too many redirects starting at {origin}")
+
+
 def call_llm(messages: list[dict], model: str, base_url: str, api_key: str) -> str:
     url = base_url.rstrip("/") + "/chat/completions"
     payload = json.dumps(
         {"model": model, "messages": messages, "temperature": 0.2, "max_tokens": 900}
     ).encode()
+    is_github = (urllib.parse.urlsplit(url).hostname or "").endswith("github.ai")
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {api_key}",
-        "Accept": "application/json",
+        "Accept": "application/vnd.github+json" if is_github else "application/json",
         "X-GitHub-Api-Version": "2022-11-28",  # ignored by other providers
         "User-Agent": "cellpulse-ci-analyzer",  # GitHub APIs expect a User-Agent
     }
     last_error = None
     for attempt in range(1, 4):
         try:
-            req = urllib.request.Request(url, data=payload, headers=headers, method="POST")
-            with urllib.request.urlopen(req, timeout=90) as resp:  # noqa: S310 - fixed https endpoint
-                raw = resp.read().decode(errors="replace")
-                try:
-                    return json.loads(raw)["choices"][0]["message"]["content"].strip()
-                except (json.JSONDecodeError, KeyError, IndexError, TypeError):
-                    raise RuntimeError(
-                        f"unexpected reply from {url} (HTTP {resp.status}): {raw[:200]!r}"
-                    ) from None
+            status, raw, final_url = _post(url, payload, headers)
+            try:
+                return json.loads(raw)["choices"][0]["message"]["content"].strip()
+            except (json.JSONDecodeError, KeyError, IndexError, TypeError):
+                raise RuntimeError(
+                    f"unexpected reply from {final_url} (HTTP {status}): {raw[:200]!r}"
+                ) from None
         except urllib.error.HTTPError as exc:
-            detail = exc.read().decode(errors="replace")[:300]
+            detail = exc.read().decode(errors="replace")[:300] if exc.fp else ""
             last_error = f"HTTP {exc.code} from {url}: {detail}"
             if exc.code not in (429, 500, 502, 503, 504):
                 break  # bad model name, bad token, etc. - retrying won't help
             wait = min(int(exc.headers.get("Retry-After", 5 * attempt) or 5), 30)
-        except (urllib.error.URLError, TimeoutError, KeyError, IndexError, json.JSONDecodeError) as exc:
+        except (urllib.error.URLError, TimeoutError) as exc:
             last_error, wait = f"{type(exc).__name__}: {exc}", 5 * attempt
         if attempt < 3:
             time.sleep(wait)

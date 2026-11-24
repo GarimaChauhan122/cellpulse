@@ -29,12 +29,23 @@ def test_clean_log_strips_timestamps_and_colours():
     assert ai.clean_log(raw) == ["FAILED tests/test_api.py"]
 
 
-def test_select_lines_keeps_hidden_error_lines():
-    lines = ["##[error]boom early"] + [f"noise {i}" for i in range(300)] + ["last line"]
+def test_select_lines_focuses_on_the_error_not_the_cleanup_noise():
+    lines = ["setup"] + [f"pytest output {i}" for i in range(50)] + ["FAILED test_x", "##[error]exit code 1"]
+    lines += [f"post job cleanup {i}" for i in range(300)]
     picked = ai.select_lines(lines, tail_lines=20)
-    assert "##[error]boom early" in picked
-    assert picked[-1] == "last line"
-    assert len(picked) < 40
+    assert any("FAILED test_x" in line for line in picked)
+    assert not any("post job cleanup 200" in line for line in picked)
+
+
+def test_select_lines_keeps_earlier_error_lines():
+    lines = ["##[error]first problem"] + [f"noise {i}" for i in range(300)] + ["##[error]last problem"]
+    picked = ai.select_lines(lines, tail_lines=20)
+    assert "##[error]first problem" in picked and "##[error]last problem" in picked
+
+
+def test_select_lines_without_errors_uses_the_tail():
+    lines = [f"line {i}" for i in range(100)]
+    assert ai.select_lines(lines, tail_lines=10)[-1] == "line 99"
 
 
 def test_prepare_log_is_bounded_and_redacted():
@@ -77,7 +88,7 @@ def test_call_llm_parses_openai_style_response(monkeypatch):
         seen["auth"] = req.get_header("Authorization")
         return FakeResponse({"choices": [{"message": {"content": " the answer "}}]})
 
-    monkeypatch.setattr(ai.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(ai, "_open", fake_urlopen)
     assert ai.call_llm([], "m", "https://example.test/v1/", "KEY") == "the answer"
     assert seen == {"url": "https://example.test/v1/chat/completions", "auth": "Bearer KEY"}
 
@@ -91,7 +102,7 @@ def test_call_llm_retries_on_rate_limit(monkeypatch):
             raise urllib.error.HTTPError(req.full_url, 429, "slow down", {"Retry-After": "1"}, None)
         return FakeResponse({"choices": [{"message": {"content": "ok"}}]})
 
-    monkeypatch.setattr(ai.urllib.request, "urlopen", flaky)
+    monkeypatch.setattr(ai, "_open", flaky)
     monkeypatch.setattr(ai.time, "sleep", lambda s: None)
     assert ai.call_llm([], "m", "https://x", "k") == "ok" and calls["n"] == 2
 
@@ -103,7 +114,7 @@ def test_call_llm_does_not_retry_bad_request(monkeypatch):
         calls["n"] += 1
         raise urllib.error.HTTPError(req.full_url, 400, "unknown model", {}, None)
 
-    monkeypatch.setattr(ai.urllib.request, "urlopen", bad)
+    monkeypatch.setattr(ai, "_open", bad)
     with pytest.raises(RuntimeError, match="HTTP 400"):
         ai.call_llm([], "nope", "https://x", "k")
     assert calls["n"] == 1
@@ -142,7 +153,7 @@ def test_upsert_creates_comment_when_none(monkeypatch):
 
 
 def test_call_llm_reports_non_json_reply(monkeypatch):
-    monkeypatch.setattr(ai.urllib.request, "urlopen", lambda req, timeout: FakeResponse(b"<html>nope</html>"))
+    monkeypatch.setattr(ai, "_open", lambda req, timeout: FakeResponse(b"<html>nope</html>"))
     monkeypatch.setattr(ai.time, "sleep", lambda s: None)
     with pytest.raises(RuntimeError, match="unexpected reply"):
         ai.call_llm([], "m", "https://x", "k")
@@ -163,3 +174,42 @@ def test_download_log_falls_back_for_old_gh(monkeypatch):
 
     monkeypatch.setattr(ai, "gh_api", old_gh)
     assert ai.download_job_log("o/r", 5) == "plain log"
+
+
+def test_call_llm_keeps_post_when_redirected(monkeypatch):
+    seen = []
+
+    def redirecting(req, timeout):
+        seen.append((req.get_method(), req.full_url, bool(req.data)))
+        if len(seen) == 1:
+            raise urllib.error.HTTPError(
+                req.full_url, 302, "moved", {"Location": "/inference/v2/chat/completions"}, None
+            )
+        return FakeResponse({"choices": [{"message": {"content": "followed"}}]})
+
+    monkeypatch.setattr(ai, "_open", redirecting)
+    assert ai.call_llm([], "m", "https://models.github.ai/inference", "k") == "followed"
+    assert seen[1] == ("POST", "https://models.github.ai/inference/v2/chat/completions", True)
+
+
+def test_call_llm_refuses_redirect_to_another_site(monkeypatch):
+    def evil(req, timeout):
+        raise urllib.error.HTTPError(
+            req.full_url, 307, "moved", {"Location": "https://evil.example.com/steal"}, None
+        )
+
+    monkeypatch.setattr(ai, "_open", evil)
+    with pytest.raises(RuntimeError, match="refusing to follow redirect"):
+        ai.call_llm([], "m", "https://models.github.ai/inference", "secret-token")
+
+
+def test_github_endpoint_gets_github_accept_header(monkeypatch):
+    seen = {}
+
+    def grab(req, timeout):
+        seen["accept"] = req.get_header("Accept")
+        return FakeResponse({"choices": [{"message": {"content": "x"}}]})
+
+    monkeypatch.setattr(ai, "_open", grab)
+    ai.call_llm([], "m", "https://models.github.ai/inference", "k")
+    assert seen["accept"] == "application/vnd.github+json"
